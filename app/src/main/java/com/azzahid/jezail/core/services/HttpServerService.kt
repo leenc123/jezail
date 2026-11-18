@@ -16,6 +16,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.azzahid.jezail.MainActivity
+import com.azzahid.jezail.core.api.CIOEmbeddedServer
 import com.azzahid.jezail.core.api.buildServer
 import com.azzahid.jezail.core.data.models.ServerStatus
 import com.azzahid.jezail.core.utils.getLocalIpAddress
@@ -34,6 +35,11 @@ class HttpServerService : Service() {
         val defaultServerStatus = ServerStatus(
             isRunning = false, port = DEFAULT_PORT, ipAddress = "Unknown", url = null
         )
+
+        @Volatile
+        private var running = false
+
+        fun isRunning() = running
 
         private fun startService(context: Context, action: String, port: Int) {
             val intent = Intent(context, HttpServerService::class.java).apply {
@@ -58,7 +64,7 @@ class HttpServerService : Service() {
     }
 
     private var port = DEFAULT_PORT
-    private var httpServer = buildServer(port)
+    private var httpServer: CIOEmbeddedServer? = null
     private var isServerRunning = false
     private val localIp: String get() = getLocalIpAddress()
     private val binder = HttpServerBinder()
@@ -79,22 +85,36 @@ class HttpServerService : Service() {
         when (intent?.action) {
             ACTION_START_SERVER -> startHttpServer(intent.getIntExtra(EXTRA_PORT, port))
             ACTION_STOP_SERVER -> stopHttpServer()
+            // START_STICKY 被系统重启时 intent 为 null，自动恢复 HTTP 服务
+            null -> startHttpServer(port)
+            else -> startHttpServer(port)
         }
         return START_STICKY
     }
 
     private fun startHttpServer(port: Int) {
         this.port = port
-        httpServer.stop()
+        if (isServerRunning) {
+            Log.d(TAG, "Server already running on port $port")
+            updateNotification()
+            return
+        }
+        // 先进前台，满足 Android 10 的 5 秒 FGS 时限，再启动耗时的 Ktor
+        isServerRunning = false
+        running = false
+        startForeground(NOTIFICATION_ID, createNotification(port))
         try {
+            runCatching { httpServer?.stop(gracePeriodMillis = 1000, timeoutMillis = 5000) }
             httpServer = buildServer(port).apply { start() }
             isServerRunning = true
-            startForeground(NOTIFICATION_ID, createNotification(port))
+            running = true
+            updateNotification()
             Log.i(TAG, "Server started on port $port")
         } catch (e: Exception) {
             isServerRunning = false
+            running = false
             Log.e(TAG, "Failed to start server on port $port", e)
-            startForeground(NOTIFICATION_ID, createNotification(port))
+            updateNotification()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
@@ -102,12 +122,13 @@ class HttpServerService : Service() {
 
     private fun stopHttpServer() {
         try {
-            httpServer.stop(gracePeriodMillis = 1000, timeoutMillis = 5000)
-            isServerRunning = false
+            httpServer?.stop(gracePeriodMillis = 1000, timeoutMillis = 5000)
             Log.i(TAG, "Server stopped")
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping server", e)
         } finally {
+            isServerRunning = false
+            running = false
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
@@ -168,7 +189,9 @@ class HttpServerService : Service() {
 
     override fun onDestroy() {
         Log.d(TAG, "Service destroyed")
-        httpServer.stop(gracePeriodMillis = 1000, timeoutMillis = 5000)
+        runCatching { httpServer?.stop(gracePeriodMillis = 1000, timeoutMillis = 5000) }
+        isServerRunning = false
+        running = false
         super.onDestroy()
     }
 

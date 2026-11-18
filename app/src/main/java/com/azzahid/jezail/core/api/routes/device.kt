@@ -9,11 +9,12 @@ import io.github.smiley4.ktoropenapi.delete
 import io.github.smiley4.ktoropenapi.get
 import io.github.smiley4.ktoropenapi.post
 import io.github.smiley4.ktoropenapi.route
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode.Companion.InternalServerError
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.header
 import io.ktor.server.response.respond
-import io.ktor.server.response.respondFile
+import io.ktor.server.response.respondBytes
 import io.ktor.server.routing.Route
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.close
@@ -264,14 +265,19 @@ fun Route.deviceRoutes() {
         get("/screenshot", {
             description = "Capture a screenshot and return the file"
         }) {
-            val file = DeviceManager.captureScreenshot()
-            if (file != null && file.exists()) {
+            val file = withContext(Dispatchers.IO) { DeviceManager.captureScreenshot() }
+            if (file != null && file.exists() && file.canRead()) {
                 try {
+                    // 先把字节读进内存再删文件：respondFile 是异步读，
+                    // 和 finally 里 delete() 有竞态；读失败走 500 而不是崩进程
+                    val bytes = withContext(Dispatchers.IO) { file.readBytes() }
                     call.response.header(
                         "Content-Disposition",
                         "attachment; filename=\"${file.name}\""
                     )
-                    call.respondFile(file)
+                    call.respondBytes(bytes, ContentType.Image.PNG)
+                } catch (e: Exception) {
+                    call.respond(InternalServerError, Failure("Failed to read screenshot"))
                 } finally {
                     file.delete()
                 }

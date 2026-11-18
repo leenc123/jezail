@@ -280,23 +280,27 @@ fun Route.packageRoutes() {
                 val isZip = header[0] == 0x50.toByte() && header[1] == 0x4B.toByte()
 
                 if (isZip) {
-                    val hasManifest = try {
+                    val (hasManifest, isSingleApk) = try {
                         java.util.zip.ZipFile(tempFile).use { zip ->
-                            zip.getEntry("manifest.json") != null
+                            (zip.getEntry("manifest.json") != null) to
+                                (zip.getEntry("AndroidManifest.xml") != null)
                         }
                     } catch (e: Exception) {
-                        false
+                        throw IllegalArgumentException("Uploaded file is not a valid APK/XAPK")
                     }
 
                     if (hasManifest) {
                         MyPackageManager.tryInstallXapk(tempFile, forceInstall, grantPermissions)
+                    } else if (isSingleApk) {
+                        // 普通 APK 本身就是 zip：直接安装，不走下面的 splits 解包
+                        MyPackageManager.tryInstallApp(tempFile, forceInstall, grantPermissions)
                     } else {
                         val extractDir = File(JezailApp.appContext.cacheDir, "splits_${System.currentTimeMillis()}")
                         try {
                             extractDir.mkdirs()
                             java.util.zip.ZipFile(tempFile).use { zip ->
                                 zip.entries().asSequence()
-                                    .filter { !it.isDirectory && it.name.endsWith(".apk") }
+                                    .filter { !it.isDirectory && it.name.endsWith(".apk", ignoreCase = true) }
                                     .forEach { entry ->
                                         val outFile = File(extractDir, File(entry.name).name)
                                         zip.getInputStream(entry).use { input ->
@@ -304,7 +308,7 @@ fun Route.packageRoutes() {
                                         }
                                     }
                             }
-                            val apks = extractDir.listFiles()?.filter { it.extension == "apk" } ?: emptyList()
+                            val apks = extractDir.listFiles()?.filter { it.extension.equals("apk", ignoreCase = true) } ?: emptyList()
                             check(apks.isNotEmpty()) { "No APK files found in zip" }
                             if (apks.size == 1) {
                                 MyPackageManager.tryInstallApp(apks.first(), forceInstall, grantPermissions)

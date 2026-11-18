@@ -33,7 +33,6 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.util.concurrent.TimeUnit
 
 
 object DeviceManager {
@@ -489,8 +488,12 @@ object DeviceManager {
     fun captureScreenshot(): File? {
         val f = "screenshot_${System.currentTimeMillis()}.png"
         val destination = File(JezailApp.Companion.appContext.cacheDir, f)
-        val res = Shell.cmd("screencap -p ${destination.absolutePath}").exec()
-        return if (res.isSuccess) destination else null
+        // screencap 以 root 身份建文件，必须放开权限否则 App 进程读不了（EACCES）
+        val res = Shell.cmd(
+            "screencap -p ${destination.absolutePath}",
+            "chmod 644 ${destination.absolutePath}"
+        ).exec()
+        return if (res.isSuccess && destination.exists() && destination.canRead()) destination else null
     }
 
     fun pressHomeKey(): Boolean {
@@ -550,8 +553,12 @@ object DeviceManager {
     }
 
     fun captureScreenshotToFile(destination: File): Boolean {
-        val res = Shell.cmd("screencap -p ${destination.absolutePath}").exec()
-        return res.isSuccess
+        // 同 captureScreenshot：root 建的文件必须放开权限，否则调用方读不了
+        val res = Shell.cmd(
+            "screencap -p ${destination.absolutePath}",
+            "chmod 644 ${destination.absolutePath}"
+        ).exec()
+        return res.isSuccess && destination.exists() && destination.canRead()
     }
 
     fun captureScreenshotBytes(quality: Int = 50, scale: Float = 0.5f): ByteArray? {
@@ -570,54 +577,67 @@ object DeviceManager {
     }
 
     private fun captureRawBitmap(): Bitmap? {
+        // 不直接调 su -c（部分 ROM 的 su 不支持 -c 参数），走 libsu 交互式 shell 写临时文件
+        val tmp = File(JezailApp.Companion.appContext.cacheDir, "mirror_raw_${System.nanoTime()}")
         return try {
-            val process = ProcessBuilder("su", "-c", "screencap").start()
-            val input = process.inputStream.buffered()
-            val header = ByteArray(12)
-            var pos = 0
-            while (pos < 12) {
-                val n = input.read(header, pos, 12 - pos)
-                if (n <= 0) { process.destroy(); return null }
-                pos += n
+            val res = Shell.cmd(
+                "screencap '${tmp.absolutePath}'",
+                "chmod 644 '${tmp.absolutePath}'"
+            ).exec()
+            if (!res.isSuccess || !tmp.exists() || !tmp.canRead()) return null
+            tmp.inputStream().buffered().use { input ->
+                val header = ByteArray(12)
+                var pos = 0
+                while (pos < 12) {
+                    val n = input.read(header, pos, 12 - pos)
+                    if (n <= 0) return null
+                    pos += n
+                }
+                val buf = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
+                val w = buf.int
+                val h = buf.int
+                val fmt = buf.int
+                val bpp = when (fmt) {
+                    1, 2, 5 -> 4
+                    4 -> 2
+                    else -> return null
+                }
+                val size = w.toLong() * h * bpp
+                if (size <= 0 || size > 64L * 1024 * 1024) return null
+                val pixels = ByteArray(size.toInt())
+                pos = 0
+                while (pos < size) {
+                    val n = input.read(pixels, pos, minOf(65536, size.toInt() - pos))
+                    if (n <= 0) break
+                    pos += n
+                }
+                if (pos < size) return null
+                val config = if (bpp == 2) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
+                val bitmap = Bitmap.createBitmap(w, h, config)
+                bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(pixels))
+                bitmap
             }
-            val buf = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
-            val w = buf.int
-            val h = buf.int
-            val fmt = buf.int
-            val bpp = when (fmt) {
-                1, 2, 5 -> 4
-                4 -> 2
-                else -> { process.destroy(); return null }
-            }
-            val size = w * h * bpp
-            val pixels = ByteArray(size)
-            pos = 0
-            while (pos < size) {
-                val n = input.read(pixels, pos, minOf(65536, size - pos))
-                if (n <= 0) break
-                pos += n
-            }
-            process.destroy()
-            if (pos < size) return null
-            val config = if (bpp == 2) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
-            val bitmap = Bitmap.createBitmap(w, h, config)
-            bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(pixels))
-            bitmap
         } catch (_: Exception) {
             null
+        } finally {
+            tmp.delete()
         }
     }
 
     private fun capturePngBitmap(): Bitmap? {
+        // 同上：不直接调 su -c，走 libsu 交互式 shell
+        val tmp = File(JezailApp.Companion.appContext.cacheDir, "mirror_${System.nanoTime()}.png")
         return try {
-            val process = ProcessBuilder("su", "-c", "screencap -p").start()
-            val bytes = process.inputStream.readBytes()
-            process.waitFor(5, TimeUnit.SECONDS)
-            process.destroy()
-            if (bytes.isEmpty()) return null
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            val res = Shell.cmd(
+                "screencap -p '${tmp.absolutePath}'",
+                "chmod 644 '${tmp.absolutePath}'"
+            ).exec()
+            if (!res.isSuccess || !tmp.exists() || !tmp.canRead()) return null
+            BitmapFactory.decodeFile(tmp.absolutePath)
         } catch (_: Exception) {
             null
+        } finally {
+            tmp.delete()
         }
     }
 
