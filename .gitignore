@@ -22,3 +22,5 @@ out/
 
 # Android Profiling
 *.hprof
+.opencode
+dist/

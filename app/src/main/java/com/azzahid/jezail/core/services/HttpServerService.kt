@@ -17,6 +17,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.azzahid.jezail.MainActivity
 import com.azzahid.jezail.core.api.CIOEmbeddedServer
+import com.azzahid.jezail.core.api.DiscoveryResponder
 import com.azzahid.jezail.core.api.buildServer
 import com.azzahid.jezail.core.data.models.ServerStatus
 import com.azzahid.jezail.core.utils.getLocalIpAddress
@@ -110,6 +111,8 @@ class HttpServerService : Service() {
             running = true
             updateNotification()
             Log.i(TAG, "Server started on port $port")
+            runCatching { DiscoveryResponder.start(port) }
+                .onFailure { Log.w(TAG, "Discovery responder failed to start", it) }
         } catch (e: Exception) {
             isServerRunning = false
             running = false
@@ -129,6 +132,7 @@ class HttpServerService : Service() {
         } finally {
             isServerRunning = false
             running = false
+            runCatching { DiscoveryResponder.stop() }
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
@@ -189,6 +193,7 @@ class HttpServerService : Service() {
 
     override fun onDestroy() {
         Log.d(TAG, "Service destroyed")
+        runCatching { DiscoveryResponder.stop() }
         runCatching { httpServer?.stop(gracePeriodMillis = 1000, timeoutMillis = 5000) }
         isServerRunning = false
         running = false

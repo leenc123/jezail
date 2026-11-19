@@ -1,6 +1,5 @@
 package com.azzahid.jezail.core.api
 
-import android.os.Build
 import android.util.Log
 import com.azzahid.jezail.core.api.routes.adbRoutes
 import com.azzahid.jezail.core.api.routes.appDataRoutes
@@ -49,7 +48,6 @@ import io.ktor.server.request.path
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondRedirect
-import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
@@ -147,31 +145,13 @@ fun Application.configureRouting() {
                 )
             }
 
-            route("json") {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    openApi()
-                } else {
-                    get {
-                        call.respondText(
-                            "OpenAPI documentation requires Android 12 (API 31) or higher",
-                            status = HttpStatusCode.NotImplemented
-                        )
-                    }
-                }
-            }
+        route("json") {
+            openApi()
+        }
 
-            route("/swagger") {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    swaggerUI("/api/json")
-                } else {
-                    get {
-                        call.respondText(
-                            "Swagger UI requires Android 12 (API 31) or higher",
-                            status = HttpStatusCode.NotImplemented
-                        )
-                    }
-                }
-            }
+        route("/swagger") {
+            swaggerUI("/api/json")
+        }
 
             adbRoutes()
             fridaRoutes()
@@ -252,9 +232,7 @@ fun Application.configureServer() {
         allowCredentials = true
     }
 
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        install(OpenApi)
-    }
+    install(OpenApi)
 
     install(StatusPages) {
         exception<IllegalArgumentException> { call, cause ->
