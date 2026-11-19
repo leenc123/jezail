@@ -552,6 +552,65 @@ object DeviceManager {
         return result.isSuccess
     }
 
+    /**
+     * Current physical display size in pixels, honoring rotation.
+     * Null when the window service is unreachable. Pure system API, no root needed.
+     */
+    fun getDisplaySize(): Pair<Int, Int>? {
+        return try {
+            val wm = JezailApp.Companion.appContext
+                .getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
+            if (SDK_INT >= 30) {
+                val bounds = wm.currentWindowMetrics.bounds
+                val w = bounds.width()
+                val h = bounds.height()
+                if (w > 0 && h > 0) w to h else null
+            } else {
+                @Suppress("DEPRECATION")
+                val metrics = android.util.DisplayMetrics()
+                @Suppress("DEPRECATION")
+                wm.defaultDisplay.getRealMetrics(metrics)
+                if (metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+                    metrics.widthPixels to metrics.heightPixels
+                } else null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Maps 0..1 normalized mirror coordinates to physical pixels.
+     * Null when out of range or the display size is unknown.
+     * Pure function of validated inputs — safe to unit-test.
+     */
+    fun normalizedToPixels(nx: Double, ny: Double, width: Int, height: Int): Pair<Int, Int>? {
+        if (!nx.isFinite() || !ny.isFinite()) return null
+        if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return null
+        if (width <= 0 || height <= 0) return null
+        val x = (nx * width).toInt().coerceIn(0, width - 1)
+        val y = (ny * height).toInt().coerceIn(0, height - 1)
+        return x to y
+    }
+
+    /** Tap at a normalized (0..1) mirror position. Coordinates are converted to ints internally. */
+    fun inputTap(nx: Double, ny: Double): Boolean {
+        val (w, h) = getDisplaySize() ?: return false
+        val (x, y) = normalizedToPixels(nx, ny, w, h) ?: return false
+        val result = Shell.cmd("input tap $x $y").exec()
+        return result.isSuccess
+    }
+
+    /** Swipe between two normalized (0..1) positions. Duration clamped to 0..10s. */
+    fun inputSwipe(nx1: Double, ny1: Double, nx2: Double, ny2: Double, durationMs: Int = 300): Boolean {
+        val (w, h) = getDisplaySize() ?: return false
+        val (x1, y1) = normalizedToPixels(nx1, ny1, w, h) ?: return false
+        val (x2, y2) = normalizedToPixels(nx2, ny2, w, h) ?: return false
+        val dur = durationMs.coerceIn(0, 10000)
+        val result = Shell.cmd("input swipe $x1 $y1 $x2 $y2 $dur").exec()
+        return result.isSuccess
+    }
+
     fun captureScreenshotToFile(destination: File): Boolean {
         // 同 captureScreenshot：root 建的文件必须放开权限，否则调用方读不了
         val res = Shell.cmd(

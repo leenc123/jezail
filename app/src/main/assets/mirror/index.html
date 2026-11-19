@@ -18,7 +18,7 @@ select:hover,.btn:hover{border-color:#555;background:#252525}
 .btn:disabled{opacity:.3;cursor:not-allowed}
 .main{flex:1;display:flex;min-height:0}
 .screen-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:12px;min-width:0}
-#screen{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;background:#000}
+#screen{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;background:#000;cursor:crosshair;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;touch-action:none}
 .msg{color:#888;font-size:14px}
 .sidebar{width:48px;border-left:1px solid #222;display:flex;flex-direction:column;align-items:center;padding:8px 0;gap:2px;overflow-y:auto;flex-shrink:0}
 .sep{width:24px;height:1px;background:#333;margin:2px 0}
@@ -103,6 +103,46 @@ msg.textContent='Disconnected';
 }
 function key(name){fetch('/api/device/keys/'+name,{method:'POST'})}
 function screenshot(){window.open('/api/device/screenshot','_blank')}
+// Click-through: normalized (0..1) coords so server-side mapping stays
+// correct regardless of scale setting or displayed size. Tap on quick
+// click, swipe on drag, long-press (hold 550ms) sends a same-point swipe.
+function norm(e){var r=img.getBoundingClientRect();return{nx:(e.clientX-r.left)/r.width,ny:(e.clientY-r.top)/r.height}}
+function postInput(path,payload){fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).catch(function(){})}
+var pDown=null,pTimer=null,pFired=false;
+img.addEventListener('dragstart',function(e){e.preventDefault()});
+img.addEventListener('contextmenu',function(e){e.preventDefault()});
+img.addEventListener('pointerdown',function(e){
+if(!ws)return;
+var p=norm(e);
+if(p.nx<0||p.nx>1||p.ny<0||p.ny>1)return;
+pDown={x:e.clientX,y:e.clientY,p:p,t:Date.now()};
+pFired=false;
+clearTimeout(pTimer);
+pTimer=setTimeout(function(){
+if(!pDown||pFired)return;
+pFired=true;
+postInput('/api/device/input/swipe',{nx1:pDown.p.nx,ny1:pDown.p.ny,nx2:pDown.p.nx,ny2:pDown.p.ny,durationMs:600});
+},550);
+try{img.setPointerCapture(e.pointerId)}catch(_){}
+});
+img.addEventListener('pointerup',function(e){
+if(!pDown)return;
+clearTimeout(pTimer);
+if(pFired){pDown=null;return;}
+var dx=e.clientX-pDown.x,dy=e.clientY-pDown.y,dist=Math.hypot(dx,dy);
+var start=pDown.p,end=norm(e);
+var elapsed=Date.now()-pDown.t;
+pDown=null;
+if(end.nx<0||end.nx>1||end.ny<0||end.ny>1)return;
+if(dist<10){
+if(elapsed>=550){postInput('/api/device/input/swipe',{nx1:start.nx,ny1:start.ny,nx2:start.nx,ny2:start.ny,durationMs:600})}
+else{postInput('/api/device/input/tap',{nx:start.nx,ny:start.ny})}
+}else{
+var dur=Math.min(Math.max(elapsed,100),2000);
+postInput('/api/device/input/swipe',{nx1:start.nx,ny1:start.ny,nx2:end.nx,ny2:end.ny,durationMs:dur});
+}
+});
+img.addEventListener('pointercancel',function(){clearTimeout(pTimer);pDown=null});
 </script>
 </body>
 </html>

@@ -77,4 +77,23 @@ class DeviceManagerTest {
         val parts = "a \t b\t\t c".split(DeviceManager.WHITESPACE_REGEX)
         assertEquals(listOf("a", "b", "c"), parts)
     }
+
+    @Test
+    fun `normalizedToPixels maps center to half resolution`() {
+        assertEquals(540 to 1200, DeviceManager.normalizedToPixels(0.5, 0.5, 1080, 2400))
+    }
+
+    @Test
+    fun `normalizedToPixels maps corners with clamping`() {
+        assertEquals(0 to 0, DeviceManager.normalizedToPixels(0.0, 0.0, 1080, 2400))
+        assertEquals(1079 to 2399, DeviceManager.normalizedToPixels(1.0, 1.0, 1080, 2400))
+    }
+
+    @Test
+    fun `normalizedToPixels rejects out of range and NaN`() {
+        assertNull(DeviceManager.normalizedToPixels(-0.1, 0.5, 1080, 2400))
+        assertNull(DeviceManager.normalizedToPixels(0.5, 1.5, 1080, 2400))
+        assertNull(DeviceManager.normalizedToPixels(Double.NaN, 0.5, 1080, 2400))
+        assertNull(DeviceManager.normalizedToPixels(0.5, 0.5, 0, 2400))
+    }
 }

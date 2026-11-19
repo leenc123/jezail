@@ -10,6 +10,7 @@ import io.github.smiley4.ktoropenapi.get
 import io.github.smiley4.ktoropenapi.post
 import io.github.smiley4.ktoropenapi.route
 import io.ktor.http.ContentType
+import io.ktor.http.HttpStatusCode.Companion.BadRequest
 import io.ktor.http.HttpStatusCode.Companion.InternalServerError
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.header
@@ -26,6 +27,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 fun Route.deviceRoutes() {
     route("/device") {
@@ -357,6 +363,51 @@ fun Route.deviceRoutes() {
                 require(text.isNotBlank()) { "Text cannot be blank" }
                 val success = DeviceManager.inputText(text)
                 call.respond(if (success) Success("Text input sent") else Failure("Failed"))
+            }
+        }
+
+        route("/input") {
+            post("/tap", {
+                description = "Tap the screen at a normalized (0..1) mirror position; converted to physical pixels server-side"
+                request {
+                    body<String> { description = "{\"nx\":0.5,\"ny\":0.5} normalized coordinates" }
+                }
+            }) {
+                val body = runCatching {
+                    Json.parseToJsonElement(call.receiveText()).jsonObject
+                }.getOrNull()
+                val nx = body?.get("nx")?.jsonPrimitive?.doubleOrNull
+                val ny = body?.get("ny")?.jsonPrimitive?.doubleOrNull
+                if (nx == null || ny == null) {
+                    call.respond(BadRequest, Failure(error = "Missing or invalid nx/ny (expected 0..1 numbers)"))
+                    return@post
+                }
+                val success = DeviceManager.inputTap(nx, ny)
+                if (success) call.respond(Success("Tapped at $nx,$ny"))
+                else call.respond(BadRequest, Failure(error = "Invalid coordinates or tap failed"))
+            }
+
+            post("/swipe", {
+                description = "Swipe between two normalized (0..1) positions; durationMs clamped to 0..10000"
+                request {
+                    body<String> { description = "{\"nx1\":0.5,\"ny1\":0.5,\"nx2\":0.5,\"ny2\":0.8,\"durationMs\":300}" }
+                }
+            }) {
+                val body = runCatching {
+                    Json.parseToJsonElement(call.receiveText()).jsonObject
+                }.getOrNull()
+                val nx1 = body?.get("nx1")?.jsonPrimitive?.doubleOrNull
+                val ny1 = body?.get("ny1")?.jsonPrimitive?.doubleOrNull
+                val nx2 = body?.get("nx2")?.jsonPrimitive?.doubleOrNull
+                val ny2 = body?.get("ny2")?.jsonPrimitive?.doubleOrNull
+                val durationMs = body?.get("durationMs")?.jsonPrimitive?.intOrNull ?: 300
+                if (nx1 == null || ny1 == null || nx2 == null || ny2 == null) {
+                    call.respond(BadRequest, Failure(error = "Missing or invalid nx1/ny1/nx2/ny2 (expected 0..1 numbers)"))
+                    return@post
+                }
+                val success = DeviceManager.inputSwipe(nx1, ny1, nx2, ny2, durationMs)
+                if (success) call.respond(Success("Swiped"))
+                else call.respond(BadRequest, Failure(error = "Invalid coordinates or swipe failed"))
             }
         }
 
